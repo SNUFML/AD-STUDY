@@ -1,237 +1,243 @@
-#normality test
-NT<-function(data){
-  outputs<-c()
-  for(i in 1:ncol(data)){
-    output<-c()
-    st<-shapiro.test(data[,i])
-    output<-c(st$statistic,st$p.value)
-    outputs<-rbind(outputs,output)
-  }
-  colnames(outputs)<-c("shapiro test W","shapiro test p value")
-  rownames(outputs)<-colnames(data)
-  write.csv(outputs,paste("normality.test_",substitute(data),".csv",sep=""))
+###############################################################################
+# Renamed Functions (same behavior/IO as originals)
+###############################################################################
+
+# ---------- small helpers ----------
+.melt_mat <- function(mat) {
+  mat <- as.matrix(mat)
+  data.frame(
+    Var1  = rownames(mat)[row(mat)],
+    Var2  = colnames(mat)[col(mat)],
+    value = c(mat),
+    row.names = NULL,
+    check.names = FALSE
+  )
+}
+.safe_name <- function(x) paste0(deparse(substitute(x)), collapse = "")
+
+# ---------- Normality test (NT -> run_normality_tests) ----------
+run_normality_tests <- function(data) {
+  stopifnot(is.data.frame(data) || is.matrix(data))
+  dn <- .safe_name(data)
   
+  Wp <- sapply(seq_len(ncol(data)), function(i) {
+    st <- shapiro.test(as.numeric(data[, i]))
+    c(W = unname(st$statistic), p = unname(st$p.value))
+  })
+  outputs <- t(Wp)
+  colnames(outputs) <- c("shapiro test W", "shapiro test p value")
+  rownames(outputs) <- colnames(data)
   
-  pdf(paste("normality.test_",substitute(data),".pdf",sep=""))
+  write.csv(outputs, paste0("normality.test_", dn, ".csv"))
+  
+  pdf(paste0("normality.test_", dn, ".pdf"))
+  old_par <- par(no.readonly = TRUE); on.exit(par(old_par), add = TRUE)
   par(mfrow = c(3, 2))
-  for(j in 1:ncol(data)){
-    hist(data[,j],xlab  = colnames(data)[j],main=paste("Histogram of",colnames(data)[j],sep=" "))
-    qqnorm(data[,j],main=paste("Normal Q-Q plot of",colnames(data)[j],sep=" ")) 
+  for (j in seq_len(ncol(data))) {
+    x <- as.numeric(data[, j])
+    hist(x, xlab = colnames(data)[j],
+         main = paste("Histogram of", colnames(data)[j]))
+    qqnorm(x, main = paste("Normal Q-Q plot of", colnames(data)[j]))
+    qqline(x, col = "red")
   }
-  dev.off()
-}
-###part1
-
-SC<-function(data1,data2){
-  SCCmatrix<-matrix(nrow=ncol(data1),ncol=ncol(data2))
-  pmatrix<-matrix(nrow=ncol(data1),ncol=ncol(data2))
-  for(i in 1:ncol(data1)){
-    for(j in 1:ncol(data2)){
-      output<-c()
-      scctest<-cor.test(data1[,i],data2[,j],method="spearman",exact=FALSE)
-      pmatrix[i,j]<-scctest$p.value
-      SCCmatrix[i,j]<-scctest$estimate
-    }
-  }
-  colnames(SCCmatrix)<-colnames(data2)
-  rownames(SCCmatrix)<-colnames(data1)
-  colnames(pmatrix)<-colnames(data2)
-  rownames(pmatrix)<-colnames(data1)
-  return(list(SCCmatrix,pmatrix))
+  dev.off(invisible = TRUE)
+  invisible(outputs)
 }
 
-###part2
-OR<-function(form,meta.d,clinic.d,outcome.d){
-  outputs1<-c()#form1 OR and P
-  for (i in 1:ncol(meta.d)){
-    output1<-c()
-    tempdata<-data.frame(meta.d[,i]/sd(meta.d[,i]),clinic.d,outcome.d)
-    colnames(tempdata)<-c("meta",colnames(clinic.d),colnames(outcome.d))
-    #model1
-    cm1 <- try(clogit(form, data = tempdata),silent = T)
-    if ('try-error' %in% class(cm1)) {
-      output1<-rbind(outputs1,rep(0,4))
-      next
-    }else{
-      CI<-exp(confint(cm1))[1,]
-      OR<-exp(coef(cm1))[1]
-      p<-as.data.frame(summary(cm1)$coefficient)$`Pr(>|z|)`[1]
-      output1<-cbind(CI[1],CI[2],OR,p)
-      outputs1<-rbind(outputs1,output1)
-    }
-  }
-  fdr<-p.adjust(outputs1[,4],"fdr")
-  outputs<-data.frame(outputs1,fdr)
-  colnames(outputs)<-c("2.5% CI","97.5% CI","OR","p","fdr")
-  rownames(outputs)<-colnames(meta.d)
-  return(outputs)
+# ---------- Spearman cross-correlation (SC -> spearman_crosscorr) ----------
+spearman_crosscorr <- function(data1, data2) {
+  data1 <- as.data.frame(data1, check.names = FALSE)
+  data2 <- as.data.frame(data2, check.names = FALSE)
+  
+  coef_mat <- suppressWarnings(cor(data1, data2, method = "spearman",
+                                   use = "pairwise.complete.obs"))
+  
+  i_idx <- rep(seq_len(ncol(data1)), times = ncol(data2))
+  j_idx <- rep(seq_len(ncol(data2)), each  = ncol(data1))
+  pv <- mapply(function(i, j) {
+    suppressWarnings(cor.test(data1[[i]], data2[[j]],
+                              method = "spearman", exact = FALSE)$p.value)
+  }, i_idx, j_idx)
+  
+  p_mat <- matrix(pv, nrow = ncol(data1), ncol = ncol(data2),
+                  dimnames = list(colnames(data1), colnames(data2)))
+  rownames(coef_mat) <- colnames(data1); colnames(coef_mat) <- colnames(data2)
+  list(coef_mat, p_mat)
 }
 
-#set training dataset and validation set
-split_dataset<-function(n.seed,proportion.subdataset1){
-  id<-table(outcome.d$match)
+# ---------- Conditional logistic OR (OR -> clogit_or_scan) ----------
+clogit_or_scan <- function(form, meta.d, clinic.d, outcome.d) {
+  stopifnot(nrow(meta.d) == nrow(clinic.d), nrow(meta.d) == nrow(outcome.d))
+  meta.d   <- as.data.frame(meta.d, check.names = FALSE)
+  clinic.d <- as.data.frame(clinic.d, check.names = FALSE)
+  outcome.d<- as.data.frame(outcome.d, check.names = FALSE)
+  
+  rows <- lapply(seq_len(ncol(meta.d)), function(i) {
+    tmp <- data.frame(
+      meta = meta.d[, i] / sd(meta.d[, i], na.rm = TRUE),
+      clinic.d, outcome.d, check.names = FALSE
+    )
+    fit <- try(survival::clogit(form, data = tmp), silent = TRUE)
+    if (inherits(fit, "try-error")) return(c(0, 0, 0, 0))
+    
+    ci <- try(exp(confint(fit))[1, ], silent = TRUE)
+    if (inherits(ci, "try-error")) ci <- c(NA_real_, NA_real_)
+    or <- try(exp(coef(fit))[1], silent = TRUE)
+    if (inherits(or, "try-error")) or <- NA_real_
+    p  <- try(as.data.frame(summary(fit)$coefficient)$`Pr(>|z|)`[1],
+              silent = TRUE)
+    if (inherits(p, "try-error")) p <- NA_real_
+    c(ci[1], ci[2], or, p)
+  })
+  
+  outputs1 <- do.call(rbind, rows)
+  colnames(outputs1) <- c("2.5% CI", "97.5% CI", "OR", "p")
+  rownames(outputs1) <- colnames(meta.d)
+  
+  fdr <- p.adjust(outputs1[, "p"], "fdr")
+  outputs <- data.frame(outputs1, fdr)
+  colnames(outputs) <- c("2.5% CI", "97.5% CI", "OR", "p", "fdr")
+  outputs
+}
+
+# ---------- Dataset split (split_dataset -> split_by_match) ----------
+split_by_match <- function(n.seed, proportion.subdataset1) {
+  ids <- names(table(outcome.d$match))
   set.seed(n.seed)
-  train_row<-sample(1:length(id),length(id)*proportion.subdataset1)
-  train_ID<-names(id)[train_row]
-  #training dataset
-  t_rows<-c()
-  for(i in 1:length(train_ID)){
-    t_row<-c()
-    t_row<-which(outcome.d$match==train_ID[i])
-    t_rows<-c(t_rows,t_row)
-  }
-  t_meta.d<-meta.d[t_rows,]
-  t_clinic.d<-clinic.d[t_rows,]
-  t_outcome.d<-outcome.d[t_rows,]
-  #validation dataset
-  v_meta.d<-meta.d[-t_rows,]
-  v_clinic.d<-clinic.d[-t_rows,]
-  v_outcome.d<-outcome.d[-t_rows,]
-  output<-list(t_meta.d,t_clinic.d,t_outcome.d,v_meta.d,v_clinic.d,v_outcome.d)
-  return(output)
+  n_train <- round(length(ids) * proportion.subdataset1)
+  train_ID <- sample(ids, n_train)
+  
+  idx_train <- which(outcome.d$match %in% train_ID)
+  idx_valid <- setdiff(seq_len(nrow(outcome.d)), idx_train)
+  
+  t_meta.d    <- meta.d[idx_train, , drop = FALSE]
+  t_clinic.d  <- clinic.d[idx_train, , drop = FALSE]
+  t_outcome.d <- outcome.d[idx_train, , drop = FALSE]
+  
+  v_meta.d    <- meta.d[idx_valid, , drop = FALSE]
+  v_clinic.d  <- clinic.d[idx_valid, , drop = FALSE]
+  v_outcome.d <- outcome.d[idx_valid, , drop = FALSE]
+  
+  list(t_meta.d, t_clinic.d, t_outcome.d, v_meta.d, v_clinic.d, v_outcome.d)
 }
 
-#select validation dataset randomly
-random_dataset<-function(n.seed,percentage){
-  id<-table(outcome.d$match)
+# ---------- Random subset (random_dataset -> sample_by_match) ----------
+sample_by_match <- function(n.seed, percentage) {
+  ids <- names(table(outcome.d$match))
   set.seed(n.seed)
-  select_row<-sample(1:length(id),length(id)*percentage)
-  select_ID<-names(id)[select_row]
-  #select dataset
-  s_rows<-c()
-  for(i in 1:length(select_ID)){
-    s_row<-c()
-    s_row<-which(outcome.d$match==select_ID[i])
-    s_rows<-c(s_rows,s_row)
-  }
-  s_meta.d<-meta.d[s_rows,]
-  s_clinic.d<-clinic.d[s_rows,]
-  s_outcome.d<-outcome.d[s_rows,]
-  output<-list(s_meta.d,s_clinic.d,s_outcome.d)
-  return(output)
-}
-random_OR<-function(times.random,percentage){
-  ORs<-c()
-  ps<-c()
-  fdrs<-c()
-  for(i in 1:times.random){
-    random.d<-random_dataset(i,percentage)
-    r_ORresult<-OR(form1,random.d[[1]],random.d[[2]],random.d[[3]])
-    OR<-r_ORresult$OR
-    p<-r_ORresult$p
-    fdr<-r_ORresult$fdr
-    ORs<-cbind(ORs,OR)
-    ps<-cbind(ps,p)
-    fdrs<-cbind(fdrs,fdr)
-  }
-  ORs_g1_p<-c()
-  ORs_l1_p<-c()
-  ORs_g1_fdr<-c()
-  ORs_l1_fdr<-c()
-  for (i in 1:nrow(ORs)){
-    OR_g1_p<-length(which(ORs[i,]>1 & ps[i,]<0.05))
-    OR_l1_p<-length(which(ORs[i,]<1 & ps[i,]<0.05))
-    OR_g1_fdr<-length(which(ORs[i,]>1 & fdrs[i,]<0.05))
-    OR_l1_fdr<-length(which(ORs[i,]<1 & fdrs[i,]<0.05))
-    ORs_g1_p<-c(ORs_g1_p,OR_g1_p)
-    ORs_l1_p<-c(ORs_l1_p,OR_l1_p)
-    ORs_g1_fdr<-c(ORs_g1_fdr,OR_g1_fdr)
-    ORs_l1_fdr<-c(ORs_l1_fdr,OR_l1_fdr)
-  }
-  output<-data.frame(ORs_g1_p,ORs_g1_fdr,ORs_l1_p,ORs_l1_fdr)
-  colnames(output)<-c("OR>1,p<0.05","OR>1,fdr<0.05","OR<1,p<0.05","OR<1,fdr<0.05")
-  rownames(output)<-colnames(meta.d)
-  return(output)
+  sel_ID <- sample(ids, round(length(ids) * percentage))
+  idx <- which(outcome.d$match %in% sel_ID)
+  
+  s_meta.d    <- meta.d[idx, , drop = FALSE]
+  s_clinic.d  <- clinic.d[idx, , drop = FALSE]
+  s_outcome.d <- outcome.d[idx, , drop = FALSE]
+  list(s_meta.d, s_clinic.d, s_outcome.d)
 }
 
-###Part3
+# ---------- Random OR counts (random_OR -> random_or_counts) ----------
+random_or_counts <- function(times.random, percentage) {
+  OR_list <- replicate(times.random, {
+    rd <- sample_by_match(n.seed = sample.int(1e6, 1), percentage = percentage)
+    clogit_or_scan(form1, rd[[1]], rd[[2]], rd[[3]])
+  }, simplify = FALSE)
+  
+  OR_mat  <- do.call(cbind, lapply(OR_list, `[[`, "OR"))
+  p_mat   <- do.call(cbind, lapply(OR_list, `[[`, "p"))
+  fdr_mat <- do.call(cbind, lapply(OR_list, `[[`, "fdr"))
+  
+  gt1_p   <- rowSums(OR_mat > 1 & p_mat < 0.05,  na.rm = TRUE)
+  lt1_p   <- rowSums(OR_mat < 1 & p_mat < 0.05,  na.rm = TRUE)
+  gt1_fdr <- rowSums(OR_mat > 1 & fdr_mat < 0.05, na.rm = TRUE)
+  lt1_fdr <- rowSums(OR_mat < 1 & fdr_mat < 0.05, na.rm = TRUE)
+  
+  out <- data.frame(
+    `OR>1,p<0.05`   = gt1_p,
+    `OR>1,fdr<0.05` = gt1_fdr,
+    `OR<1,p<0.05`   = lt1_p,
+    `OR<1,fdr<0.05` = lt1_fdr,
+    check.names = FALSE
+  )
+  rownames(out) <- colnames(meta.d)
+  out
+}
 
-#mediation function
-CM<-function(form.a,form.b,form.c){
-  outputs<-c()
-  for(i in 1:ncol(meta.d)){
-    for(j in 1:ncol(clinic.d)){
-      output<-c()
-      tempdata<-data.frame(outcome.d$case,(meta.d[,i]-mean(meta.d[,i]))/sd(meta.d[,i]),clinic.d[,j])
-      colnames(tempdata)<-c("case","meta","clinic")
-      cm.a<-lm(form.a,data=tempdata) ##ls as mediation meta-ls-t2dm
-      cm.b<-glm(form.b,data=tempdata)##t2dm as outcome
-      cm.c<-glm(form.c,data=tempdata)
-      set.seed(001)
-      a<-c()
-      b<-c()
-      c<-c()
-      cm<-mediate(cm.a,cm.b,treat="meta",mediator="clinic",boot=T)
-      a<-c(summary(cm.a)$coefficients[2,1],summary(cm.a)$coefficients[2,4])
-      b<-c(summary(cm.b)$coefficients[3,1],summary(cm.b)$coefficients[3,4])
-      c<-c(summary(cm.c)$coefficients[2,1],summary(cm.c)$coefficients[2,4])
+# ---------- Mediation grid (CM -> causal_mediation_grid) ----------
+causal_mediation_grid <- function(form.a, form.b, form.c) {
+  out_rows <- list(); k <- 1
+  for (i in seq_len(ncol(meta.d))) {
+    for (j in seq_len(ncol(clinic.d))) {
+      tmp <- data.frame(
+        case   = outcome.d$case,
+        meta   = (meta.d[, i] - mean(meta.d[, i], na.rm = TRUE)) /
+          sd(meta.d[, i], na.rm = TRUE),
+        clinic = clinic.d[, j],
+        check.names = FALSE
+      )
+      cm.a <- lm(form.a, data = tmp)
+      cm.b <- glm(form.b, data = tmp, family = binomial())
+      cm.c <- glm(form.c, data = tmp, family = binomial())
       
-      output<-c(colnames(meta.d)[i],colnames(clinic.d)[j],
-                a,
-                b,
-                c,
-                cm$d0,cm$d0.ci,cm$d0.p,
-                cm$z0,cm$z0.ci,cm$z0.p,
-                cm$tau.coef,cm$tau.ci,cm$tau.p,
-                cm$n0,cm$n0.ci,cm$n0.p)
-      outputs<-rbind(outputs,output)
+      set.seed(1)
+      md <- mediation::mediate(cm.a, cm.b, treat = "meta",
+                               mediator = "clinic", boot = TRUE)
+      
+      a <- c(unname(coef(summary(cm.a))[2, 1]),
+             unname(coef(summary(cm.a))[2, 4]))
+      b <- c(unname(coef(summary(cm.b))[3, 1]),
+             unname(coef(summary(cm.b))[3, 4]))
+      c_ <- c(unname(coef(summary(cm.c))[2, 1]),
+              unname(coef(summary(cm.c))[2, 4]))
+      
+      out_rows[[k]] <- c(
+        metabolites = colnames(meta.d)[i],
+        `clinical parameters` = colnames(clinic.d)[j],
+        `beta a` = a[1], `p a` = a[2],
+        `beta b` = b[1], `p b` = b[2],
+        `beta c` = c_[1], `p c` = c_[2],
+        acme = md$d0, `2.5%CI` = md$d0.ci[1], `97.5%CI` = md$d0.ci[2], `p acme` = md$d0.p,
+        ade  = md$z0, `2.5%CI.1` = md$z0.ci[1], `97.5%CI.1` = md$z0.ci[2], `p ade`  = md$z0.p,
+        te   = md$tau.coef, `2.5%CI.2` = md$tau.ci[1], `97.5%CI.2` = md$tau.ci[2], `p te` = md$tau.p,
+        prop = md$n0, `2.5%CI.3` = md$n0.ci[1], `97.5%CI.3` = md$n0.ci[2], `p prop` = md$n0.p
+      )
+      k <- k + 1
     }
   }
-  colnames(outputs)<-c("metabolites","clinical parameters",
-                       "beta a","p a",
-                       "beta b","p b",
-                       "beta c","p c",
-                       "acme","2.5%CI","97.5%CI","p acme",
-                       "ade","2.5%CI","97.5%CI","p ade",
-                       "te","2.5%CI","97.5%CI","p te",
-                       "prop","2.5%CI","97.5%CI","p prop")
-  return (outputs)
+  outputs <- as.data.frame(do.call(rbind, out_rows), check.names = FALSE)
+  colnames(outputs) <- c("metabolites","clinical parameters",
+                         "beta a","p a","beta b","p b","beta c","p c",
+                         "acme","2.5%CI","97.5%CI","p acme",
+                         "ade","2.5%CI","97.5%CI","p ade",
+                         "te","2.5%CI","97.5%CI","p te",
+                         "prop","2.5%CI","97.5%CI","p prop")
+  outputs
 }
 
-###Part4
-
-VP<-function(form){
-  corrs<-c()
-  vars<-c()
-  for(i in 1:ncol(meta.d)){
-    tempdata<-data.frame(meta.d[,i],clinic.d)
-    tempdata$sex<-factor(tempdata$sex)
-    colnames(tempdata)<-c("meta",colnames(clinic.d))
-    fit<-lm(form,tempdata)
-    var<-as.matrix(calcVarPart(fit)*100)
-    corr<-as.matrix(coef(fit))
-    vars<-cbind(vars,var)
-    corrs<-cbind(corrs,corr)
-  }
-  colnames(vars)<-colnames(meta.d)
-  colnames(corrs)<-colnames(meta.d)
-  vars<-vars[-nrow(vars),]
-  corrs<-corrs[-1,]
-  corr_type<-array(,c(nrow(corrs),ncol(corrs)))
-  for(k in 1:nrow(corrs)){
-    for(z in 1:ncol(corrs)){
-      if(corrs[k,z]>=0 ){
-        corr_type[k,z]<-"pos"
-      }else {
-        corr_type[k,z]<-"neg"
-      }
-    }
-  }
-  colnames(corr_type)<-colnames(meta.d)
-  outputs<-list(vars,corr_type)
-  return(outputs)
-}
-
-#plot
-VPplot<-function(var,corr_type){
-  plot_data1=melt(var[,1,drop=F])
-  plot_data2=melt(corr_type[,1,drop=F])
-  plot_data2$value=factor(plot_data2$value)
+# ---------- Variance partition (VP -> variance_partition_scan) ----------
+# ---- Normality diagnostics ----
+run_normality_tests <- function(data) {
+  stopifnot(is.data.frame(data) || is.matrix(data))
+  dn <- deparse(substitute(data))
   
-  ggplot(data=plot_data1,mapping=aes(x=value,y=Var1,pattern = plot_data2$value ))+
-    geom_bar_pattern(stat="identity",color = "black",pattern_angle = 45, pattern_density = 0.1, pattern_spacing = 0.025, pattern_key_scale_factor = 0.6)+
-    scale_pattern_manual(values = c(neg = "stripe", pos = "none"))+
-    labs(x="VPplot",y="")
+  Wp <- sapply(seq_len(ncol(data)), function(i) {
+    st <- shapiro.test(as.numeric(data[, i]))
+    c(W = unname(st$statistic), p = unname(st$p.value))
+  })
+  outputs <- t(Wp)
+  colnames(outputs) <- c("shapiro test W", "shapiro test p value")
+  rownames(outputs) <- colnames(data)
   
+  write.csv(outputs, paste0("normality.test_", dn, ".csv"))
+  
+  pdf(paste0("normality.test_", dn, ".pdf"))
+  old_par <- par(no.readonly = TRUE); on.exit(par(old_par), add = TRUE)
+  par(mfrow = c(3, 2))
+  for (j in seq_len(ncol(data))) {
+    x <- as.numeric(data[, j])
+    hist(x, xlab = colnames(data)[j],
+         main = paste("Histogram of", colnames(data)[j]))
+    qqnorm(x, main = paste("Normal Q-Q plot of", colnames(data)[j]))
+    qqline(x, col = "red")
+  }
+  dev.off()   
+  invisible(outputs)
 }
-

@@ -1,126 +1,90 @@
-###############################################################################
-# Title: Cross-dataset correlation and heatmap with significance overlay
-# Author: Yumi Kim
-#
-# Purpose
-#   - Read two feature matrices (e.g., metabolites from two tissues/platforms)
-#   - Autoscale each matrix (center/scale) for comparability
-#   - Compute pairwise Spearman correlations between all features across matrices
-#   - Save coefficient/p-value table and draw a heatmap with significance marks
-#
-# Inputs (CSV files; first column is an ID to be moved to rownames)
-#   - "Example data\\Cor_C_Example.csv"
-#   - "Example data\\Cor_S_Example.csv"
-#
-# Outputs
-#   - "Coefficient_pvalue.csv" (long-format table: var1, var2, coef, pvalue)
-#   - "Cor_Heatmap.pdf"        (heatmap of correlation coefficients, stars for p-values)
-#
-# Dependencies
-#   - Custom functions expected in "R/Cor_functions.R":
-#       * NT(data) : normality test per column (writes CSV/PDF)
-#       * SC(d1,d2): Spearman correlation between data frames; returns list(coef, p)
-#   - Packages used here: mdatools, reshape2, circlize, ComplexHeatmap, grid
-#     (The script also loads survival, mediation, variancePartition, ggplot2,
-#      ggpattern which may be required by other functions in Cor_functions.R.
-#      They are not directly used below.)
-###############################################################################
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Yumi Kim
 
-# Clean environment
+###############################################################################
+# Main Script (updated to new function names)
+###############################################################################
+setwd("C:\\Users\\yumikim\\Documents\\카카오톡 받은 파일\\Code")
 rm(list = ls())
 
-# Source user-defined functions: NT(), SC(), etc.
-source("R/Cor_functions.R")
+# ---- Packages ----
+suppressPackageStartupMessages({
+  library(circlize)
+  library(ComplexHeatmap)
+  library(grid)
+  library(survival)
+  library(mediation)
+  library(variancePartition)
+  library(ggplot2)
+  library(ggpattern)
+})
 
-# ---- R packages (load only; install beforehand if needed) -------------------
-library(mdatools)         # prep.autoscale()
-library(reshape2)         # melt()
-library(circlize)         # colorRamp2()
-library(ComplexHeatmap)   # Heatmap(), max_text_width()
-library(grid)             # grid.rect(), grid.text(), unit(), gpar()
-library(survival)
-library(mediation)
-library(variancePartition)
-library(ggplot2)
-library(ggpattern)
+# ---- Load data ----
+read_feature_matrix <- function(path) {
+  df <- read.csv(path, check.names = FALSE)
+  rownames(df) <- df[[1]]
+  as.matrix(df[-1])
+}
+meta.d.1 <- read_feature_matrix("Example data\\Cor_C_Example.csv")
+meta.d.2 <- read_feature_matrix("Example data\\Cor_S_Example.csv")
 
-# ---- Load data --------------------------------------------------------------
-# Expectation: first column is an ID; remaining columns are numeric features.
-meta.d.1 <- read.csv("Example data\\Cor_C_Example.csv")
-rownames(meta.d.1) <- meta.d.1[, 1]      # move first column to rownames
-meta.d.1 <- meta.d.1[, -1]
-meta.d.1 <- as.matrix(meta.d.1)
+# Optional original names (unchanged behavior)
+meta_realnames   <- colnames(read.csv("Example data\\Cor_C_Example.csv", check.names = FALSE))[-1]
+meta.2_realnames <- colnames(read.csv("Example data\\Cor_S_Example.csv", check.names = FALSE))[-1]
 
-meta.d.2 <- read.csv("Example data\\Cor_S_Example.csv")
-rownames(meta.d.2) <- meta.d.2[, 1]
-meta.d.2 <- meta.d.2[, -1]
-meta.d.2 <- as.matrix(meta.d.2)
+# ---- Autoscale ----
+autoscale_df <- function(mat) as.data.frame(scale(mat, TRUE, TRUE), check.names = FALSE)
+meta.d   <- autoscale_df(meta.d.1)
+meta.d.2 <- autoscale_df(meta.d.2)
 
-# (Optional) keep original column names for reporting
-meta.d.realname    <- read.csv("Example data\\Cor_C_Example.csv")
-meta_realnames     <- colnames(meta.d.realname[, 2:ncol(meta.d.realname)])
-meta.d.2.realname  <- read.csv("Example data\\Cor_S_Example.csv")
-meta.2_realnames   <- colnames(meta.d.2.realname[, 2:ncol(meta.d.2.realname)])
+# ---- Normality diagnostics ----
+run_normality_tests(meta.d)
+run_normality_tests(meta.d.2)
 
-# ---- Autoscale each matrix (mean-center and unit-scale) ---------------------
-# This helps make features comparable across platforms/units.
-meta.d   <- prep.autoscale(meta.d.1, center = TRUE, scale = TRUE) |> as.data.frame()
-meta.d.2 <- prep.autoscale(meta.d.2, center = TRUE, scale = TRUE) |> as.data.frame()
+# ---- Spearman correlation across datasets ----
+C.Result <- spearman_crosscorr(meta.d, meta.d.2)
+SCmatrix <- C.Result[[1]]
+pvalues  <- C.Result[[2]]
 
-# ---- Normality diagnostics (optional; writes CSV/PDF per NT() implementation)
-NT(meta.d)
-NT(meta.d.2)
-
-# ---- Spearman correlation across the two datasets ---------------------------
-# SC() should return: list(correlation_matrix, pvalue_matrix)
-SCresult <- SC(meta.d, meta.d.2)
-SCmatrix <- SCresult[[1]]
-pvalues  <- SCresult[[2]]
-
-# ---- Save long-format table of coefficients and p-values --------------------
-melt_SCmatrix <- melt(SCmatrix)
-colnames(melt_SCmatrix) <- c("var1", "var2", "coef")
-melt_SCpval <- melt(pvalues)
-colnames(melt_SCpval) <- c("var1", "var2", "pvalue")
-melt_matrix <- cbind(melt_SCmatrix, melt_SCpval)
+# ---- Save long-format coef/pvalue table ----
+df_coef <- .melt_mat(SCmatrix); names(df_coef) <- c("var1", "var2", "coef")
+df_pval <- .melt_mat(pvalues);  names(df_pval) <- c("Var1", "Var2", "pvalue")
+melt_matrix <- merge(df_coef, df_pval, by.x = c("var1", "var2"),
+                     by.y = c("Var1", "Var2"), sort = FALSE)
 write.csv(melt_matrix, "Coefficient_pvalue.csv", row.names = FALSE)
 
-# Keep data.frames for plotting
-SCmatrix <- as.data.frame(SCmatrix)
-SCpvalue <- as.data.frame(pvalues)
-
-# ---- Heatmap with significance overlay --------------------------------------
-# Color scale: blue (−1) → white (0) → red (+1)
-col_rnorm <- colorRamp2(c(-1, 0, 1), c("#799fcb", "white", "#f9665e"))
+# ---- Heatmap with significance overlay ----
+col_rnorm <- circlize::colorRamp2(c(-1, 0, 1), c("#799fcb", "white", "#f9665e"))
+star_mat <- matrix("", nrow = nrow(pvalues), ncol = ncol(pvalues),
+                   dimnames = dimnames(pvalues))
+star_mat[pvalues < 0.01] <- "**"
+star_mat[pvalues <= 0.05 & pvalues >= 0.01] <- "*"
 
 pdf(file = "Cor_Heatmap.pdf", width = 10, height = 10)
-Heatmap(
+ComplexHeatmap::Heatmap(
   as.matrix(SCmatrix),
-  column_title = NULL,
-  row_title    = NULL,
-  col          = col_rnorm,
+  column_title = NULL, row_title = NULL, col = col_rnorm,
   column_dend_side = "top",
-  width        = unit(5, "cm"),
-  height       = unit(5, "cm"),
+  width  = grid::unit(5, "cm"),
+  height = grid::unit(5, "cm"),
   row_names_side    = "left",
   column_names_side = "bottom",
   cluster_rows      = TRUE,
   cluster_columns   = TRUE,
-  column_names_gp   = gpar(fontsize = 6),
-  row_names_gp      = gpar(fontsize = 6),
-  # max_text_width() helps avoid clipping long labels
-  row_names_max_width    = max_text_width(rownames(t(SCmatrix))),
-  column_names_max_height = max_text_width(rownames(t(SCmatrix))),
-  # cell_fun: draw grid border and significance stars based on p-values
+  column_names_gp   = grid::gpar(fontsize = 6),
+  row_names_gp      = grid::gpar(fontsize = 6),
+  row_names_max_width     = ComplexHeatmap::max_text_width(rownames(SCmatrix)),
+  column_names_max_height = ComplexHeatmap::max_text_width(colnames(SCmatrix)),
   cell_fun = function(j, i, x, y, w, h, fill) {
-    grid.rect(x = x, y = y, width = w, height = h, gp = gpar(col = "grey", fill = NA))
-    if (SCpvalue[i, j] < 0.01) {
-      grid.text("**", x, y, vjust = 0.8, gp = gpar(col = "white", fontsize = 6), rot = 90)
-    } else if (SCpvalue[i, j] <= 0.05) {
-      grid.text("*",  x, y, vjust = 0.8, gp = gpar(col = "white", fontsize = 6), rot = 90)
+    grid::grid.rect(x = x, y = y, width = w, height = h,
+                    gp = grid::gpar(col = "grey", fill = NA))
+    if (nzchar(star_mat[i, j])) {
+      grid::grid.text(star_mat[i, j], x, y, vjust = 0.8,
+                      gp = grid::gpar(col = "white", fontsize = 6), rot = 90)
     }
   }
 )
 dev.off()
+
 
 # End of script
