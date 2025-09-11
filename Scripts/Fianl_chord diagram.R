@@ -1,5 +1,4 @@
 rm(list = ls())
-setwd("E:\\ymkim\\experiment file\\Gut-Brain axis\\종근당 바이오\\3차\\JONG_3RD_SAMPLE\\MZMINE\\Known data(논문용)\\Correlation\\Kynurenic acid with others")
 
 library(circlize)
 library(reshape2)
