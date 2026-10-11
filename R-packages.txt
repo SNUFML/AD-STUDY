@@ -1,0 +1,16 @@
+circlize
+ComplexHeatmap
+data.table
+DescTools
+dplyr
+effsize
+factoextra
+FSA
+ggplot2
+grid
+LMSstat
+matrixTests
+readxl
+reshape2
+tidyr
+writexl

@@ -1,0 +1,32 @@
+# Raw or sensitive data
+data/raw/
+data/private/
+*.raw
+*.mzML
+*.mzXML
+
+# Generated outputs
+outputs/
+figures/
+PCA/
+*.tif
+*.tiff
+*.png
+*.pdf
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# R
+.Rhistory
+.RData
+.Rproj.user/
+renv/library/
+
+# Editors and operating systems
+.DS_Store
+Thumbs.db
+*.tmp
+~$*

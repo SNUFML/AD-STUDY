@@ -1,0 +1,19 @@
+cff-version: 1.2.0
+message: "If you use this code, please cite this repository and the associated paper."
+title: "Analysis code for the multi-organ Alzheimer’s disease gut–brain-axis study"
+type: software
+authors:
+  - family-names: Kim
+    given-names: Yumi
+repository-code: "https://github.com/SNUFML/AD-STUDY"
+url: "https://github.com/SNUFML/AD-STUDY"
+license: MIT
+version: 1.0.0
+date-released: 2026-10-11
+keywords:
+  - metabolomics
+  - Alzheimer disease
+  - gut-brain axis
+  - bile acids
+  - ClassyFire
+  - Dunnett test

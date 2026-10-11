@@ -1,0 +1,26 @@
+{
+  "statistics_files": {
+    "Cecum": "../data/processed/Cecum_statresult.csv",
+    "Colon": "../data/processed/Colon_statresult.xlsx",
+    "Frontal cortex": "../data/processed/FC_statresult.xlsx",
+    "Feces": "../data/processed/Feces_statresult.csv",
+    "Liver": "../data/processed/Liver_statresult.csv",
+    "Serum": "../data/processed/Serum_statresult.xlsx"
+  },
+  "comparisons": [
+    {
+      "label": "ADCT vs WTCT",
+      "first_tokens": ["ADCT", "AD-CT"],
+      "second_tokens": ["WTCT", "WT-CT"]
+    },
+    {
+      "label": "ADLP vs ADCT",
+      "first_tokens": ["ADLP", "AD-LP"],
+      "second_tokens": ["ADCT", "AD-CT"]
+    }
+  ],
+  "output_directory": "../outputs/classyfire_normalization",
+  "compound_column": "Compound name",
+  "minimum_superclass_count": 5,
+  "top_lipid_subclasses": 5
+}
